@@ -126,8 +126,9 @@ export function LineagePage() {
             <div><dt>Parent A</dt><dd className="mono">{selectedRecord.parent_a ?? 'None recorded'}</dd></div>
             <div><dt>Parent B</dt><dd className="mono">{selectedRecord.parent_b ?? 'None recorded'}</dd></div>
             <div><dt>Reproduction</dt><dd>{selectedRecord.reproduction_method}</dd></div>
-            <div><dt>Mutation</dt><dd>{selectedRecord.mutation_applied ? 'Applied' : 'Not applied'}</dd></div>
+            <div><dt>Mutation</dt><dd>{selectedRecord.mutation_applied === null ? 'Unknown (legacy tracking)' : selectedRecord.mutation_applied ? 'Applied' : 'Not applied'}</dd></div>
             <div><dt>Immigrant</dt><dd>{selectedRecord.immigrant ? 'Yes' : 'No'}</dd></div>
+            <div><dt>Death reason</dt><dd>{selectedRecord.status === 'DEAD' ? 'No profit by generation end' : '—'}</dd></div>
             <div><dt>Ending capital</dt><dd>{currentAgent?.ending_capital === null || currentAgent?.ending_capital === undefined ? 'Not evaluated' : formatCurrency(currentAgent.ending_capital, 2)}</dd></div>
             <div><dt>Return</dt><dd>{currentAgent?.ending_capital === null || currentAgent?.ending_capital === undefined ? 'Not evaluated' : formatNumber((currentAgent.ending_capital - currentAgent.starting_capital) / currentAgent.starting_capital * 100, 2) + '%'}</dd></div>
           </dl>
@@ -142,9 +143,9 @@ export function LineagePage() {
         </div>
         <div className="table-scroll lineage-table">
           <table>
-            <thead><tr><th>Organism</th><th>State</th><th>Parent A</th><th>Parent B</th><th>Method</th><th>Offspring</th></tr></thead>
+            <thead><tr><th>Organism</th><th>State</th><th>Parent A</th><th>Parent B</th><th>Method</th><th>Mutation</th><th>Offspring</th></tr></thead>
             <tbody>
-              {filtered.map((record) => <tr key={record.agent_id} aria-selected={record.agent_id === selectedRecord?.agent_id} onClick={() => setSelectedAgentId(record.agent_id)}><td><button className="table-select" type="button" onClick={(event) => { event.stopPropagation(); setSelectedAgentId(record.agent_id); }}>{record.agent_id}</button></td><td><span className={`text-status status-${stateClass(record.status)}`}>{record.status}</span></td><td className="mono">{record.parent_a ?? '—'}</td><td className="mono">{record.parent_b ?? '—'}</td><td>{record.reproduction_method}</td><td className="mono">{record.offspring_ids.length}</td></tr>)}
+              {filtered.map((record) => <tr key={record.agent_id} aria-selected={record.agent_id === selectedRecord?.agent_id} onClick={() => setSelectedAgentId(record.agent_id)}><td><button className="table-select" type="button" onClick={(event) => { event.stopPropagation(); setSelectedAgentId(record.agent_id); }}>{record.agent_id}</button></td><td><span className={`text-status status-${stateClass(record.status)}`}>{record.status}</span></td><td className="mono">{record.parent_a ?? '—'}</td><td className="mono">{record.parent_b ?? '—'}</td><td>{record.reproduction_method}</td><td>{record.mutation_applied === null ? 'Unknown (legacy)' : record.mutation_applied ? 'Applied' : '—'}</td><td className="mono">{record.offspring_ids.length}</td></tr>)}
             </tbody>
           </table>
         </div>

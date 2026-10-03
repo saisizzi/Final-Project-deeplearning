@@ -30,6 +30,7 @@ class TradingEngine:
         generation_trading_days: int | None = None,
     ) -> None:
         self.signal_threshold = float(signal_threshold if signal_threshold is not None else settings.signal_threshold)
+        self.position_size_override = position_size
         self.position_size = float(position_size if position_size is not None else settings.position_size)
         self.stop_loss = float(stop_loss if stop_loss is not None else settings.stop_loss)
         self.take_profit = float(take_profit if take_profit is not None else settings.take_profit)
@@ -103,7 +104,8 @@ class TradingEngine:
         price = float(row.get("Close", row.get("ClosePrice", 0.0)))
         if price <= 0:
             return
-        max_quantity = int(np.floor((agent.cash * self.position_size) / (price * (1.0 + agent.transaction_cost))))
+        position_size = self.position_size if self.position_size_override is not None else agent.position_size_fraction
+        max_quantity = int(np.floor((agent.cash * position_size) / (price * (1.0 + agent.transaction_cost))))
         if max_quantity <= 0:
             return
         quantity = max_quantity

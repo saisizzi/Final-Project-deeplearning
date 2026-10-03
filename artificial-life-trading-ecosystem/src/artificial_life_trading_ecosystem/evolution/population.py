@@ -31,7 +31,7 @@ class PopulationConfig:
     generations: int = 50
     generation_trading_days: int = 10
     starting_capital: float = 100000.0
-    survival_threshold: float = 0.90
+    survival_threshold: float = 1.0
     mutation_rate: float = 0.05
     mutation_sigma: float = 0.10
     immigrant_fraction: float = 0.05
@@ -51,7 +51,7 @@ class Population:
         self.generation = int(getattr(cfg, "generation", 0))
         self.generation_trading_days = int(getattr(cfg, "generation_trading_days", 10))
         self.generation_status = GenerationStatus.READY
-        self.survival_threshold = float(cfg.survival_threshold)
+        self.survival_threshold = 1.0
         self.mutation_rate = float(cfg.mutation_rate)
         self.mutation_sigma = float(cfg.mutation_sigma)
         self.immigrant_fraction = float(cfg.immigrant_fraction)
@@ -179,7 +179,7 @@ class Population:
             children = self.make_immigrants(count=self.population_size)
         else:
             ranked = sorted(survivors, key=lambda agent: float(agent.statistics["ending_capital"]), reverse=True)
-            elite_count = min(max(0, self.elite_count), len(ranked), self.population_size)
+            elite_count = min(max(1, self.elite_count), len(ranked), self.population_size)
             children = self.preserve_elite(ranked[:elite_count])
             parents = self.capital_weighted_selection(survivors)
             while len(children) < self.population_size:
@@ -199,29 +199,36 @@ class Population:
     def eligible_parents(self) -> list[Agent]:
         if self.generation_status != GenerationStatus.EVALUATED:
             return []
-        return [agent for agent in self.agents if agent.status == "ALIVE" and bool(agent.alive) and float(agent.statistics.get("ending_capital", 0.0)) >= self.starting_capital * self.survival_threshold]
+        profit_floor = self.starting_capital * self.survival_threshold
+        return [agent for agent in self.agents if agent.status == "ALIVE" and bool(agent.alive) and float(agent.statistics.get("ending_capital", 0.0)) > profit_floor]
 
     def surviving_agents(self) -> list[Agent]:
         if self.generation_status != GenerationStatus.EVALUATED:
             return []
-        return [agent for agent in self.agents if agent.status == "ALIVE" and bool(agent.alive) and float(agent.statistics.get("ending_capital", 0.0)) >= self.starting_capital * self.survival_threshold]
+        profit_floor = self.starting_capital * self.survival_threshold
+        return [agent for agent in self.agents if agent.status == "ALIVE" and bool(agent.alive) and float(agent.statistics.get("ending_capital", 0.0)) > profit_floor]
 
     def mark_dead_agents(self) -> int:
         if self.generation_status != GenerationStatus.EVALUATED:
             raise RuntimeError("Only evaluated generations can assign survival status.")
         dead_count = 0
+        profit_floor = self.starting_capital * self.survival_threshold
         for agent in self.agents:
             ending = float(agent.statistics["ending_capital"])
-            if ending < self.starting_capital * self.survival_threshold:
+            if agent.status == "DEAD" or not agent.alive or ending <= profit_floor:
                 agent.alive = False
                 agent.status = "DEAD"
-                self.lineage[agent.agent_id].status = "DEAD"
-                agent.statistics["dead_reason"] = "threshold"
+                lineage_record = self.lineage.get(agent.agent_id)
+                if lineage_record is not None:
+                    lineage_record.status = "DEAD"
+                agent.statistics["dead_reason"] = "no_profit"
                 dead_count += 1
             else:
                 agent.alive = True
                 agent.status = "ALIVE"
-                self.lineage[agent.agent_id].status = "ALIVE"
+                lineage_record = self.lineage.get(agent.agent_id)
+                if lineage_record is not None:
+                    lineage_record.status = "ALIVE"
         return dead_count
 
     @staticmethod
@@ -407,15 +414,29 @@ class Population:
     def create_child(self, *, parent_a: Agent | None, parent_b: Agent | None, generation: int, method: str = "sexual") -> Agent:
         if parent_a is None and parent_b is None:
             base_genome = DecisionGenome.from_default(seed=int(self.rng.integers(0, 10_000_000)))
-        elif parent_a is not None and parent_b is None:
-            base_genome = self.mutate_genome(parent_a.genome, mutation_rate=max(self.mutation_rate * 2.0, 0.2), mutation_sigma=self.mutation_sigma, rng=self.rng)
-        else:
+        elif parent_a is not None and parent_b is not None:
             if self.rng.random() < 0.5:
                 base_genome = self.uniform_crossover(parent_a.genome, parent_b.genome, rng=self.rng)
             else:
                 alpha = float(self.rng.uniform(0.10, 0.90))
                 base_genome = self.arithmetic_crossover(parent_a.genome, parent_b.genome, alpha=alpha, rng=self.rng)
-            base_genome = self.mutate_genome(base_genome, mutation_rate=self.mutation_rate, mutation_sigma=self.mutation_sigma, rng=self.rng)
+        else:
+            parent = parent_a or parent_b
+            base_genome = DecisionGenome.from_flattened(
+                parent.genome.flatten(),
+                context_length=parent.genome.context_length,
+                hidden_units=parent.genome.hidden_units,
+            )
+        genome_before_mutation = base_genome.flatten().copy()
+        if parent_a is not None or parent_b is not None:
+            mutation_rate = max(self.mutation_rate * 2.0, 0.2) if parent_a is None or parent_b is None else self.mutation_rate
+            base_genome = self.mutate_genome(
+                base_genome,
+                mutation_rate=mutation_rate,
+                mutation_sigma=self.mutation_sigma,
+                rng=self.rng,
+            )
+        mutation_applied = not np.array_equal(genome_before_mutation, base_genome.flatten())
         child = Agent(
             agent_id=self._new_agent_id(),
             generation=int(generation),
@@ -436,7 +457,7 @@ class Population:
             parent_b=child.parent_b,
             generation=int(generation),
             reproduction_method=method,
-            mutation_applied=(method in {"sexual", "asexual"}),
+            mutation_applied=mutation_applied,
             immigrant=False,
             status="READY",
             metadata={"method": method},
@@ -468,7 +489,8 @@ class Population:
 
     def compute_generation_statistics(self, agents: list[Agent], generation: int) -> dict[str, Any]:
         ending_capitals = [float(agent.statistics.get("ending_capital", agent.cash)) for agent in agents]
-        alive = [agent for agent in agents if agent.status == "ALIVE" and bool(agent.alive) and float(agent.statistics.get("ending_capital", 0.0)) >= self.starting_capital * self.survival_threshold]
+        profit_floor = self.starting_capital * self.survival_threshold
+        alive = [agent for agent in agents if agent.status == "ALIVE" and bool(agent.alive) and float(agent.statistics.get("ending_capital", 0.0)) > profit_floor]
         dead = [agent for agent in agents if agent.status == "DEAD"]
         stats = {
             "generation": int(generation),

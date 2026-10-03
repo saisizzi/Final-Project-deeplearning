@@ -25,10 +25,19 @@ export function PopulationPage() {
   const selected = state.generations.find((generation) => generation.generation === selectedGeneration) ?? state.generations.at(-1);
   const metrics = selected?.metrics;
   const agents = selected?.agents ?? [];
-  const events = selected?.daily_events ?? [];
-  const decisions = latestDecisions(events);
   const selectedReady = selected?.status === 'READY';
   const selectedEvaluated = selected?.status === 'EVALUATED';
+  const deadAgents = agents.filter((agent) => agent.status === 'DEAD');
+  const mutationStatusUnknown = selectedEvaluated
+    ? metrics?.mutation_count == null
+    : agents.some((agent) => agent.mutation_applied === null);
+  const mutationCount = mutationStatusUnknown
+    ? 'Unknown'
+    : selectedEvaluated
+      ? Number(metrics?.mutation_count ?? 0)
+      : agents.filter((agent) => agent.mutation_applied === true).length;
+  const events = selected?.daily_events ?? [];
+  const decisions = latestDecisions(events);
   const chartGenerations = state.generations.filter((generation) => generation.status === 'EVALUATED');
   const trajectory = chartGenerations.map((generation) => ({
     label: `G${generation.generation}`,
@@ -39,7 +48,8 @@ export function PopulationPage() {
   if (state.status === 'RUNNING' && state.day > 0) {
     trajectory.push({ label: `G${state.generation} · D${state.day}`, best: state.best_capital, mean: state.mean_capital, worst: state.worst_capital });
   }
-  const canRunGeneration = state.remaining_development_days >= state.generation_days;
+  const availableRunCount = Math.floor((state.remaining_development_days + state.day) / state.generation_days);
+  const canRunGeneration = availableRunCount > 0;
   const lastEvent = events.at(-1);
 
   return (
@@ -68,10 +78,11 @@ export function PopulationPage() {
           <div className="control-row" aria-label="Simulation controls">
             <button type="button" onClick={() => void nextDay()} disabled={busy || state.status === 'EVALUATED' || !canRunGeneration}>Next day</button>
             <button type="button" onClick={() => void runGeneration()} disabled={busy || state.status === 'EVALUATED' || !canRunGeneration}>Run generation</button>
-            <button type="button" onClick={() => void runGenerations(runCount)} disabled={busy || state.remaining_development_days < runCount * state.generation_days}>Run {runCount}</button>
+            <button type="button" onClick={() => void runGenerations(runCount)} disabled={busy || availableRunCount < runCount}>Run {runCount}</button>
             <button type="button" onClick={() => void reset()} disabled={busy}>Reset</button>
             <span className="control-status" role="status" aria-live="polite">{busy ? 'Updating simulation...' : ''}</span>
           </div>
+          <p className="supporting-line">At generation end, agents with ending capital at or below starting capital are marked DEAD. Only profit-making agents can parent the next generation; if none profit, the population is replenished with new immigrants.</p>
         </div>
       </section>
 
@@ -119,36 +130,57 @@ export function PopulationPage() {
           <div><span className="metric-label">Day</span><strong>{selected?.day ?? 0} / {state.generation_days}</strong></div>
           <div><span className="metric-label">Ending capital</span><strong>{selectedEvaluated ? formatCurrency(Number(metrics?.best_ending_capital ?? state.best_capital)) : 'Not evaluated'}</strong></div>
           <div><span className="metric-label">Survival</span><strong>{selectedEvaluated ? `${Number(metrics?.alive_count ?? 0)} alive · ${Number(metrics?.dead_count ?? 0)} dead` : 'Not evaluated'}</strong></div>
+          <div><span className="metric-label">Deaths this generation</span><strong>{selectedEvaluated ? Number(metrics?.dead_count ?? 0) : deadAgents.length}</strong></div>
           <div><span className="metric-label">Generation trades</span><strong>{selectedReady ? 0 : events.reduce((total, event) => total + event.trade_count, 0)}</strong></div>
           <div><span className="metric-label">Genetic diversity</span><strong>{metrics ? formatNumber(Number(metrics.genetic_diversity), 3) : '—'}</strong></div>
-          <div><span className="metric-label">Mutations</span><strong>{metrics ? Number(metrics.mutation_count ?? 0) : '—'}</strong></div>
+          <div><span className="metric-label">{selectedEvaluated ? 'Mutated next-gen agents' : 'Mutated agents this generation'}</span><strong>{mutationCount}</strong></div>
         </div>
-        {metrics && <p className="supporting-line">{Number(metrics.immigrant_count ?? 0)} immigrants · {Number(metrics.sexual_children ?? 0)} sexual births · {Number(metrics.asexual_children ?? 0)} asexual births</p>}
+        {metrics && <p className="supporting-line">{Number(metrics.profit_making_parent_count ?? metrics.alive_count ?? 0)} profit-making parents · {Number(metrics.offspring_count ?? 0)} replacements · {Number(metrics.immigrant_count ?? 0)} immigrants · {Number(metrics.sexual_children ?? 0)} sexual births · {Number(metrics.asexual_children ?? 0)} asexual births</p>}
       </section>
 
       <section className="agent-table-section">
         <div className="section-heading-row"><div><p className="section-kicker">Organism inspection</p><h2>Agents · generation {selected?.generation}</h2></div><span className="count-label">{agents.length} organisms</span></div>
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Agent</th><th>State</th><th>Forecast</th><th>Score</th><th>Threshold</th><th>Action</th><th>Position</th><th>Daily P&amp;L</th><th>Capital</th><th>Trades</th></tr></thead>
+            <thead><tr><th>Agent</th><th>State</th><th>Forecast</th><th>Score</th><th>Threshold</th><th>Action</th><th>Position</th><th>Daily P&amp;L</th><th>Capital</th><th>Mutation</th><th>Trades</th></tr></thead>
             <tbody>
               {agents.map((agent: RuntimeAgent) => {
                 const decision = decisions.get(agent.agent_id);
                 return (
                   <tr key={agent.agent_id}>
-                    <td className="agent-id">{agent.agent_id}</td><td><span className={`text-status status-${agent.status.toLowerCase()}`}>{agent.status}</span></td>
+                    <td className="agent-id">{agent.agent_id}</td><td><span className={`text-status status-${agent.status.toLowerCase()}`}>{agent.status}</span>{agent.dead_reason === 'no_profit' && <small className="quiet"> · no profit</small>}</td>
                     <td className="table-numeric">{decision ? formatNumber(decision.forecast, 5) : '—'}</td>
                     <td className="table-numeric">{decision ? formatNumber(decision.decision_score, 5) : '—'}</td>
                     <td className="table-numeric">{formatNumber(agent.threshold, 3)}</td><td>{decision?.action ?? (selectedReady ? 'READY' : '—')}</td>
                     <td className="table-numeric">{formatNumber(agent.position, 2)}</td>
                     <td className="table-numeric">{decision ? formatCurrency(decision.daily_pnl, 2) : '—'}</td>
-                    <td className="table-numeric">{formatCurrency(agent.ending_capital ?? agent.capital)}</td><td className="table-numeric">{agent.trade_count}</td>
+                    <td className="table-numeric">{formatCurrency(agent.ending_capital ?? agent.capital)}</td><td>{agent.mutation_applied === null ? 'Unknown (legacy)' : agent.mutation_applied ? 'Applied' : '—'}</td><td className="table-numeric">{agent.trade_count}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
+      </section>
+
+      {mutationStatusUnknown && <p className="supporting-line">Mutation details for this generation were not recorded accurately by the previous tracking version.</p>}
+
+      <section className="death-record-section">
+        <div className="section-heading-row"><div><p className="section-kicker">Generation mortality</p><h2>Deaths · generation {selected?.generation}</h2></div><span className="count-label">{selectedEvaluated ? deadAgents.length : 'Pending evaluation'}</span></div>
+        {!selectedEvaluated ? <p className="empty-state">Deaths are determined after the full generation is evaluated against the break-even profit rule.</p> : deadAgents.length === 0 ? <p className="empty-state">No agents died; every agent finished above starting capital.</p> : (
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead><tr><th>Agent</th><th>Reason</th><th>Starting capital</th><th>Ending capital</th><th>Profit / loss</th></tr></thead>
+              <tbody>{deadAgents.map((agent) => <tr key={agent.agent_id}>
+                <td className="agent-id">{agent.agent_id}</td>
+                <td>{agent.dead_reason === 'no_profit' ? 'No profit by generation end' : 'Did not meet profit rule'}</td>
+                <td className="table-numeric">{formatCurrency(agent.starting_capital)}</td>
+                <td className="table-numeric">{formatCurrency(agent.ending_capital ?? agent.capital)}</td>
+                <td className="table-numeric">{formatCurrency((agent.ending_capital ?? agent.capital) - agent.starting_capital)}</td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       <section className="event-log-section">

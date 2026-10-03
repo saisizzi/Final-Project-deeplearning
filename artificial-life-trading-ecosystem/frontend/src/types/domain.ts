@@ -231,6 +231,8 @@ export interface RuntimeAgent {
   parent_b: string | null;
   immigrant: boolean;
   elite: boolean;
+  dead_reason?: string | null;
+  mutation_applied?: boolean | null;
 }
 
 export interface RuntimeDecision extends Omit<RuntimeAgent, 'status' | 'alive' | 'starting_capital' | 'ending_capital' | 'capital' | 'trade_history' | 'equity_curve' | 'parent_a' | 'parent_b' | 'immigrant' | 'elite'> {
@@ -241,6 +243,7 @@ export interface RuntimeDecision extends Omit<RuntimeAgent, 'status' | 'alive' |
   entry: RuntimeTrade | null;
   exit: RuntimeTrade | null;
   trades: RuntimeTrade[];
+  status?: string;
 }
 
 export interface RuntimeDailyEvent {
@@ -259,7 +262,7 @@ export interface RuntimeGeneration {
   generation: number;
   status: GenerationLifecycle;
   day: number;
-  metrics: Record<string, number | string> | null;
+  metrics: Record<string, number | string | null> | null;
   agents: RuntimeAgent[];
   daily_events: RuntimeDailyEvent[];
   best_agent_id?: string;
@@ -274,7 +277,7 @@ export interface RuntimeLineage {
   offspring_ids: string[];
   generation: number;
   reproduction_method: string;
-  mutation_applied: boolean;
+  mutation_applied: boolean | null;
   immigrant: boolean;
   status: LineageLifecycle;
   metadata: Record<string, unknown>;
@@ -300,6 +303,15 @@ export interface SimulationState {
   lineage: RuntimeLineage[];
   strategy_curves: Record<string, number[]>;
   remaining_development_days: number;
+  population_config: {
+    population_size: number;
+    starting_capital: number;
+    survival_threshold: number;
+    mutation_rate: number;
+    mutation_sigma: number;
+    immigrant_fraction: number;
+    seed: number;
+  };
 }
 
 export interface AvailableExperiment {

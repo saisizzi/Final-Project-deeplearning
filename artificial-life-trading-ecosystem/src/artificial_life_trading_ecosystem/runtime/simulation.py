@@ -15,7 +15,6 @@ from artificial_life_trading_ecosystem.agents.agent import Agent
 from artificial_life_trading_ecosystem.evolution.population import GenerationStatus, Population, PopulationConfig
 from artificial_life_trading_ecosystem.lineage.lineage import LineageRecord
 from artificial_life_trading_ecosystem.models.genomes.decision_genome import DecisionGenome
-from artificial_life_trading_ecosystem.trading.engine import TradingEngine
 
 
 class InteractiveSimulation:
@@ -32,7 +31,7 @@ class InteractiveSimulation:
         state_path: str | Path,
         population_size: int = 10,
         starting_capital: float = 100000.0,
-        survival_threshold: float = 0.90,
+        survival_threshold: float = 1.0,
         mutation_rate: float = 0.05,
         mutation_sigma: float = 0.10,
         seed: int = 42,
@@ -68,6 +67,7 @@ class InteractiveSimulation:
         self.latest_decisions: dict[str, dict[str, Any]] = {}
         self.strategy_curves: dict[str, list[float]] = {"manual_baseline": [], "buy_and_hold": []}
         self._buy_hold_quantity: float | None = None
+        self.legacy_mutations_through_generation = -1
         if load_existing and self.state_path.exists():
             self._load_state()
 
@@ -127,7 +127,7 @@ class InteractiveSimulation:
         restored["genome"] = self._deserialize_genome(restored["genome"])
         return Agent(**restored)
 
-    def _serialize_lineage(self) -> list[dict[str, Any]]:
+    def _serialize_lineage(self, *, display_legacy_status: bool = True) -> list[dict[str, Any]]:
         return [
             {
                 "agent_id": record.agent_id,
@@ -137,13 +137,22 @@ class InteractiveSimulation:
                 "offspring_ids": record.offspring_ids,
                 "generation": record.generation,
                 "reproduction_method": record.reproduction_method,
-                "mutation_applied": record.mutation_applied,
+                "mutation_applied": (
+                    self._mutation_status(record.generation, record.mutation_applied)
+                    if display_legacy_status
+                    else record.mutation_applied
+                ),
                 "immigrant": record.immigrant,
                 "status": record.status,
                 "metadata": record.metadata,
             }
             for record in self.population.lineage.values()
         ]
+
+    def _mutation_status(self, generation: int, mutation_applied: bool) -> bool | None:
+        if 0 < generation <= self.legacy_mutations_through_generation:
+            return None
+        return mutation_applied
 
     def _persisted_payload(self) -> dict[str, Any]:
         return {
@@ -156,6 +165,7 @@ class InteractiveSimulation:
             "population_status": self.population.generation_status.value,
             "population_agent_counter": self.population._agent_counter,
             "development_cursor": self.development_cursor,
+            "legacy_mutations_through_generation": self.legacy_mutations_through_generation,
             "completed_generations": self.completed_generations,
             "current_day_events": self.current_day_events,
             "latest_decisions": self.latest_decisions,
@@ -163,7 +173,7 @@ class InteractiveSimulation:
             "buy_hold_quantity": self._buy_hold_quantity,
             "manual_baseline": self._serialize_agent(self.manual_baseline) if hasattr(self, "manual_baseline") else None,
             "agents": [self._serialize_agent(agent) for agent in self.population.agents],
-            "lineage": self._serialize_lineage(),
+            "lineage": self._serialize_lineage(display_legacy_status=False),
         }
 
     @staticmethod
@@ -203,8 +213,21 @@ class InteractiveSimulation:
         self.population.lineage = {
             item["agent_id"]: LineageRecord(**item) for item in payload.get("lineage", [])
         }
+        self.legacy_mutations_through_generation = int(
+            payload.get("legacy_mutations_through_generation", self.population.generation)
+        )
         self.development_cursor = int(payload["development_cursor"])
         self.completed_generations = payload.get("completed_generations", [])
+        for generation in self.completed_generations:
+            generation_number = int(generation["generation"])
+            if 0 < generation_number <= self.legacy_mutations_through_generation:
+                for agent in generation.get("agents", []):
+                    agent["mutation_applied"] = None
+            if (
+                0 < generation_number + 1 <= self.legacy_mutations_through_generation
+                and generation.get("metrics") is not None
+            ):
+                generation["metrics"]["mutation_count"] = None
         self.current_day_events = payload.get("current_day_events", [])
         self.latest_decisions = payload.get("latest_decisions", {})
         self.strategy_curves = payload.get("strategy_curves", {"manual_baseline": [], "buy_and_hold": []})
@@ -216,6 +239,19 @@ class InteractiveSimulation:
                 **payload["manual_baseline"],
                 "genome": self._deserialize_genome(payload["manual_baseline"]["genome"]),
             })
+        if self.generation_status == GenerationStatus.RUNNING:
+            for agent in self.population.agents:
+                if agent.statistics.get("dead_reason") == "threshold":
+                    agent.alive = True
+                    agent.status = "RUNNING"
+                    agent.statistics.pop("dead_reason", None)
+                    lineage_record = self.population.lineage.get(agent.agent_id)
+                    if lineage_record is not None:
+                        lineage_record.status = "RUNNING"
+                    decision = self.latest_decisions.get(agent.agent_id)
+                    if decision is not None:
+                        decision.pop("dead_reason", None)
+                        decision["status"] = "RUNNING"
 
     def reset(self) -> dict[str, Any]:
         with self.lock:
@@ -224,6 +260,7 @@ class InteractiveSimulation:
             self.completed_generations = []
             self.current_day_events = []
             self.latest_decisions = {}
+            self.legacy_mutations_through_generation = -1
             self.strategy_curves = {"manual_baseline": [], "buy_and_hold": []}
             self._buy_hold_quantity = None
             if hasattr(self, "manual_baseline"):
@@ -269,7 +306,8 @@ class InteractiveSimulation:
             if self.generation_status == GenerationStatus.READY:
                 self.population.generation_status = GenerationStatus.RUNNING
                 for agent in self.population.agents:
-                    agent.status = "RUNNING"
+                    if agent.status != "DEAD":
+                        agent.status = "RUNNING"
 
             row = self.development_market.iloc[self.development_cursor]
             history = self._current_history()
@@ -280,10 +318,13 @@ class InteractiveSimulation:
                 feature_columns=self.feature_columns,
             ) if len(history) else 0.0
             context = self.population.engine._normalized_context(history, len(history) - 1) if len(history) else [0.0] * self.population.engine.context_length
-            decisions = [
-                self.population.engine.simulate_daily_step(agent, row, forecast, context)
-                for agent in self.population.agents
-            ]
+            decisions = []
+            for agent in self.population.agents:
+                if agent.status == "DEAD" or not agent.alive:
+                    continue
+                decision = self.population.engine.simulate_daily_step(agent, row, forecast, context)
+                decision["status"] = "RUNNING"
+                decisions.append(decision)
             self._generation_baseline_step(row, forecast, context)
             action_counts = {action: sum(entry["action"] == action for entry in decisions) for action in ("BUY", "HOLD", "SELL")}
             capitals = [float(agent.cash) for agent in self.population.agents]
@@ -317,31 +358,48 @@ class InteractiveSimulation:
         self.population.generation_status = GenerationStatus.EVALUATED
         self.population.mark_dead_agents()
         stats = self.population.compute_generation_statistics(self.population.agents, self.population.generation)
+        stats["profit_making_parent_count"] = len(self.population.surviving_agents())
         ranked = sorted(self.population.agents, key=lambda item: float(item.statistics["ending_capital"]), reverse=True)
-        self.completed_generations.append(
-            {
-                "generation": self.population.generation,
-                "status": GenerationStatus.EVALUATED.value,
-                "day": self.generation_days,
-                "metrics": stats,
-                "agents": [
-                    self._agent_display(
-                        agent,
-                        self.population.generation,
-                        self.latest_decisions.get(agent.agent_id),
-                        evaluated=True,
-                    )
-                    for agent in self.population.agents
-                ],
-                "daily_events": self.current_day_events,
-                "best_agent_id": ranked[0].agent_id if ranked else None,
-                "strategy_curves": self.strategy_curves,
-            }
-        )
+        completed_generation = {
+            "generation": self.population.generation,
+            "status": GenerationStatus.EVALUATED.value,
+            "day": self.generation_days,
+            "metrics": stats,
+            "agents": [
+                self._agent_display(
+                    agent,
+                    self.population.generation,
+                    self.latest_decisions.get(agent.agent_id),
+                    evaluated=True,
+                )
+                for agent in self.population.agents
+            ],
+            "daily_events": self.current_day_events,
+            "best_agent_id": ranked[0].agent_id if ranked else None,
+            "strategy_curves": self.strategy_curves,
+        }
+        self.completed_generations.append(completed_generation)
         self.current_day_events = []
         self.strategy_curves = {"manual_baseline": [], "buy_and_hold": []}
         self._buy_hold_quantity = None
-        self.population.reproduce_next_generation()
+        children = self.population.reproduce_next_generation()
+        stats["mutation_count"] = sum(
+            self.population.lineage[child.agent_id].mutation_applied
+            for child in children
+        )
+        stats["offspring_count"] = len(children)
+        stats["sexual_children"] = sum(
+            self.population.lineage[child.agent_id].reproduction_method == "sexual"
+            for child in children
+        )
+        stats["asexual_children"] = sum(
+            self.population.lineage[child.agent_id].reproduction_method == "asexual"
+            for child in children
+        )
+        stats["immigrant_count"] = sum(
+            bool(child.statistics.get("immigrant", False))
+            for child in children
+        )
         self.latest_decisions = {}
 
     def run_current_generation(self) -> dict[str, Any]:
@@ -366,6 +424,7 @@ class InteractiveSimulation:
             return self.get_state()
 
     def _agent_display(self, agent: Agent, generation: int, latest: dict[str, Any] | None, *, evaluated: bool) -> dict[str, Any]:
+        lineage_record = self.population.lineage.get(agent.agent_id)
         return {
             "agent_id": agent.agent_id,
             "generation": generation,
@@ -387,6 +446,11 @@ class InteractiveSimulation:
             "parent_b": agent.parent_b,
             "immigrant": bool(agent.statistics.get("immigrant", False)),
             "elite": bool(agent.statistics.get("elite", False)),
+            "dead_reason": agent.statistics.get("dead_reason"),
+            "mutation_applied": self._mutation_status(
+                lineage_record.generation,
+                lineage_record.mutation_applied,
+            ) if lineage_record else False,
         }
 
     def get_state(self) -> dict[str, Any]:
@@ -433,4 +497,13 @@ class InteractiveSimulation:
                 "lineage": self._serialize_lineage(),
                 "strategy_curves": self.strategy_curves,
                 "remaining_development_days": len(self.development_market) - self.development_cursor,
+                "population_config": {
+                    "population_size": self.population.population_size,
+                    "starting_capital": self.population.starting_capital,
+                    "survival_threshold": self.population.survival_threshold,
+                    "mutation_rate": self.population.mutation_rate,
+                    "mutation_sigma": self.population.mutation_sigma,
+                    "immigrant_fraction": self.population.immigrant_fraction,
+                    "seed": self.population.seed,
+                },
             }

@@ -133,7 +133,7 @@ def test_dead_agents_cannot_reproduce() -> None:
         agent.alive = True
         agent.status = "ALIVE"
     population.agents[0].statistics["ending_capital"] = 80000.0
-    population.agents[1].statistics["ending_capital"] = 100000.0
+    population.agents[1].statistics["ending_capital"] = 100001.0
     population.agents[2].statistics["ending_capital"] = 20000.0
     population.agents[3].statistics["ending_capital"] = 0.0
     eligible = population.eligible_parents()
@@ -141,7 +141,7 @@ def test_dead_agents_cannot_reproduce() -> None:
     assert population.agents[1].agent_id in {a.agent_id for a in eligible}
 
 
-def test_zero_trade_agents_survive_when_capital_meets_threshold() -> None:
+def test_zero_profit_agents_die_at_generation_end() -> None:
     cfg = PopulationConfig(population_size=5, seed=11)
     population = Population(cfg)
     population.generation_status = GenerationStatus.EVALUATED
@@ -150,23 +150,23 @@ def test_zero_trade_agents_survive_when_capital_meets_threshold() -> None:
         agent.statistics["ending_capital"] = agent.starting_capital
         agent.status = "RUNNING"
     dead = population.mark_dead_agents()
-    assert dead == 0
-    assert all(agent.alive and agent.status == "ALIVE" for agent in population.agents)
+    assert dead == 5
+    assert all(not agent.alive and agent.status == "DEAD" for agent in population.agents)
 
 
-def test_survival_threshold_applied_correctly() -> None:
+def test_only_agents_with_positive_profit_survive() -> None:
     cfg = PopulationConfig(population_size=4, starting_capital=100000.0, survival_threshold=0.90, seed=12)
     population = Population(cfg)
     population.generation_status = GenerationStatus.EVALUATED
     for i, agent in enumerate(population.agents):
-        agent.statistics["ending_capital"] = 90000.0 + i * 1000.0
+        agent.statistics["ending_capital"] = 100000.0 + i * 1000.0
         agent.alive = True
         agent.status = "ALIVE"
         agent.trade_history = [{"action": "BUY"}]
     survivors = population.surviving_agents()
-    assert len(survivors) == 4
-    population.agents[0].statistics["ending_capital"] = 85000.0
-    assert len(population.surviving_agents()) == 3
+    assert len(survivors) == 3
+    population.agents[1].statistics["ending_capital"] = 99000.0
+    assert len(population.surviving_agents()) == 2
 
 
 def test_capital_weighted_selection_prefers_larger_capital() -> None:
@@ -176,7 +176,8 @@ def test_capital_weighted_selection_prefers_larger_capital() -> None:
     for agent in population.agents[:2]:
         agent.alive = True
         agent.status = "ALIVE"
-        agent.statistics["ending_capital"] = 100000.0
+    population.agents[0].statistics["ending_capital"] = 110000.0
+    population.agents[1].statistics["ending_capital"] = 120000.0
     population.agents[2].statistics["ending_capital"] = 50000.0
     population.agents[3].statistics["ending_capital"] = 120000.0
     selected = population.capital_weighted_selection(population.eligible_parents())
@@ -292,7 +293,7 @@ def test_parent_ids_are_recorded() -> None:
 def test_generation_statistics_are_consistent() -> None:
     population = Population(PopulationConfig(population_size=6, seed=101))
     for agent in population.agents:
-        agent.statistics["ending_capital"] = 100000.0
+        agent.statistics["ending_capital"] = 100001.0
         agent.alive = True
         agent.status = "ALIVE"
         agent.trade_history = [{"action": "BUY"}, {"action": "SELL"}]

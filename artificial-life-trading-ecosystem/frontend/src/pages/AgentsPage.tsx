@@ -81,7 +81,7 @@ export function AgentsPage() {
           <table className="data-table">
             <thead><tr>
               <th>{sortButton('agent_id', 'Agent')}</th><th>{sortButton('status', 'State')}</th><th>{sortButton('capital', 'Capital')}</th><th>{sortButton('return', 'Return')}</th>
-              <th>Forecast</th><th>{sortButton('score', 'Score')}</th><th>Threshold</th><th>Action</th><th>Position</th><th>{sortButton('trade_count', 'Trades')}</th><th>Parent A</th><th>Parent B</th>
+              <th>Forecast</th><th>{sortButton('score', 'Score')}</th><th>Threshold</th><th>Action</th><th>Position</th><th>Mutation</th><th>{sortButton('trade_count', 'Trades')}</th><th>Parent A</th><th>Parent B</th>
             </tr></thead>
             <tbody>
               {visible.map((agent: RuntimeAgent) => {
@@ -96,7 +96,7 @@ export function AgentsPage() {
                     <td className="table-numeric">{decision ? formatNumber(decision.forecast, 5) : '—'}</td>
                     <td className="table-numeric">{decision ? formatNumber(decision.decision_score, 5) : '—'}</td>
                     <td className="table-numeric">{formatNumber(agent.threshold, 3)}</td><td>{decision?.action ?? 'READY'}</td>
-                    <td className="table-numeric">{formatNumber(agent.position, 2)}</td><td className="table-numeric">{agent.trade_count}</td>
+                    <td className="table-numeric">{formatNumber(agent.position, 2)}</td><td>{agent.mutation_applied === null ? 'Unknown (legacy)' : agent.mutation_applied ? 'Applied' : '—'}</td><td className="table-numeric">{agent.trade_count}</td>
                     <td className="mono">{agent.parent_a ?? '—'}</td><td className="mono">{agent.parent_b ?? '—'}</td>
                   </tr>
                 );
@@ -119,6 +119,9 @@ export function AgentsPage() {
             <div><span className="metric-label">Latest decision</span><strong>{selectedDecision?.action ?? 'Not run'}</strong></div>
             <div><span className="metric-label">Parents</span><strong>{[selected.parent_a, selected.parent_b].filter(Boolean).join(' · ') || 'None recorded'}</strong></div>
           </div>
+          {selected.dead_reason === 'no_profit' && <p className="error-state">This organism did not finish the generation above its starting capital. Its historical record is retained.</p>}
+          {selected.mutation_applied === null && <p className="supporting-line">The previous tracking version did not record this organism&apos;s actual genome change.</p>}
+          {selected.mutation_applied === true && <p className="supporting-line">This organism inherited a mutated genome from its profit-making parent(s).</p>}
         </> : <p className="empty-state">No organism is selected.</p>}
       </section>
     </>

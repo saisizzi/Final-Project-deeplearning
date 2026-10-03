@@ -5,9 +5,10 @@ import { getArtifactManifest } from '../data/repositories';
 
 export function ExperimentPage() {
   const experiment = useExperiment();
-  const { state, experiments, selectExperiment, busy } = useSimulation();
-  const manifest = getArtifactManifest();
+  const { state, experiments, selectExperiment, busy, error } = useSimulation();
+  const manifest = getArtifactManifest(state);
   const selectedModel = state?.experiment_id.split(':').at(-1) ?? experiment.forecasting_backbone;
+  const config = state?.population_config;
 
   return (
     <>
@@ -20,11 +21,12 @@ export function ExperimentPage() {
           </select></div>
           <p>Each model keeps its own development-only population state.</p>
         </div>
+        {error && <p className="error-state" role="alert">{error}</p>}
         <dl className="summary-grid">
           <div><dt>Experiment ID</dt><dd>{experiment.experiment_id}</dd></div>
           <div><dt>Experiment name</dt><dd>{experiment.experiment_name}</dd></div>
           <div><dt>Ticker</dt><dd>{experiment.ticker}</dd></div>
-          <div><dt>Source</dt><dd>Recorded research artifacts</dd></div>
+          <div><dt>Source</dt><dd>Repository model artifacts and interactive API</dd></div>
           <div><dt>Date range</dt><dd>{experiment.start_date} — {experiment.end_date}</dd></div>
           <div><dt>Interval</dt><dd>{experiment.interval}</dd></div>
           <div><dt>Dataset hash</dt><dd>{experiment.dataset_hash ?? 'Not recorded'}</dd></div>
@@ -32,15 +34,15 @@ export function ExperimentPage() {
           <div><dt>Features</dt><dd>{experiment.feature_set.join(', ')}</dd></div>
           <div><dt>Sequence length</dt><dd>{experiment.sequence_length}</dd></div>
           <div><dt>Selected interactive forecaster</dt><dd>{selectedModel}</dd></div>
-          <div><dt>Random seed</dt><dd>{experiment.seed}</dd></div>
-          <div><dt>Population size</dt><dd>{experiment.population_size} organisms</dd></div>
+          <div><dt>Random seed</dt><dd>{config?.seed ?? experiment.seed}</dd></div>
+          <div><dt>Population size</dt><dd>{config?.population_size ?? experiment.population_size} organisms</dd></div>
           <div><dt>Generation length</dt><dd>{state?.generation_days ?? 10} trading days</dd></div>
           <div><dt>Generation count</dt><dd>{state?.generations.filter((generation) => generation.status === 'EVALUATED').length ?? experiment.generations} evaluated</dd></div>
-          <div><dt>Starting capital</dt><dd>{formatCurrency(experiment.starting_capital)}</dd></div>
-          <div><dt>Survival threshold</dt><dd>{formatNumber(experiment.survival_threshold * 100, 0)}%</dd></div>
-          <div><dt>Mutation rate</dt><dd>{formatNumber(experiment.mutation_rate * 100, 1)}%</dd></div>
-          <div><dt>Mutation sigma</dt><dd>{formatNumber(experiment.mutation_sigma, 3)}</dd></div>
-          <div><dt>Immigrant fraction</dt><dd>{formatNumber(experiment.immigrant_fraction * 100, 1)}%</dd></div>
+          <div><dt>Starting capital</dt><dd>{formatCurrency(config?.starting_capital ?? experiment.starting_capital)}</dd></div>
+          <div><dt>Profit requirement</dt><dd>Ending capital above starting capital</dd></div>
+          <div><dt>Mutation rate</dt><dd>{formatNumber((config?.mutation_rate ?? experiment.mutation_rate) * 100, 1)}%</dd></div>
+          <div><dt>Mutation sigma</dt><dd>{formatNumber(config?.mutation_sigma ?? experiment.mutation_sigma, 3)}</dd></div>
+          <div><dt>Immigrant fraction</dt><dd>{formatNumber((config?.immigrant_fraction ?? experiment.immigrant_fraction) * 100, 1)}%</dd></div>
           <div><dt>Transaction cost</dt><dd>{formatNumber(experiment.transaction_cost * 100, 2)}%</dd></div>
         </dl>
       </section>

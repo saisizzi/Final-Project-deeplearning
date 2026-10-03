@@ -5,9 +5,11 @@ import { formatCurrency } from '../components/format';
 import { useExperiment } from '../contexts/experiment-context';
 import { useSimulation } from '../contexts/simulation-context';
 
-function numericMetric(metrics: Record<string, number | string> | null | undefined, key: string): number | null {
+function numericMetric(metrics: Record<string, number | string | null> | null | undefined, key: string): number | null {
   if (!metrics) return null;
-  const value = Number(metrics[key]);
+  const rawValue = metrics[key];
+  if (rawValue == null) return null;
+  const value = Number(rawValue);
   return Number.isFinite(value) ? value : null;
 }
 

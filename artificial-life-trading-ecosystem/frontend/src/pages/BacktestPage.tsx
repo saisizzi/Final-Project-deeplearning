@@ -12,8 +12,8 @@ export function BacktestPage() {
   const { state, loading } = useSimulation();
   const [generationOverride, setGenerationOverride] = useState<number | null>(null);
   const [agentId, setAgentId] = useState('');
-  const [backtest, setBacktest] = useState<RuntimeBacktest | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [backtest, setBacktest] = useState<{ key: string; value: RuntimeBacktest } | null>(null);
+  const [error, setError] = useState<{ key: string; message: string } | null>(null);
   const [visible, setVisible] = useState<Record<CurveKey, boolean>>({ selected: true, lineage: true, manual: true, hold: true });
 
   const evaluated = state?.generations.filter((generation) => generation.status === 'EVALUATED') ?? [];
@@ -23,6 +23,8 @@ export function BacktestPage() {
     : latestEvaluated ?? state?.generation ?? 0;
   const selectedGenerationRecord = state?.generations.find((generation) => generation.generation === selectedGeneration);
   const selectedIsEvaluated = selectedGenerationRecord?.status === 'EVALUATED';
+  const experimentId = state?.experiment_id;
+  const requestKey = `${experimentId ?? ''}:${selectedGeneration}:${agentId}`;
 
   useEffect(() => {
     if (!selectedIsEvaluated) return undefined;
@@ -30,23 +32,27 @@ export function BacktestPage() {
     void loadBacktest(selectedGeneration, agentId || undefined)
       .then((result) => {
         if (active) {
-          setBacktest(result);
+          setBacktest({ key: requestKey, value: result });
           setError(null);
         }
       })
       .catch((requestError: unknown) => {
         if (active) {
-          setBacktest(null);
-          setError(requestError instanceof Error ? requestError.message : 'Recorded curves are unavailable.');
+          setError({
+            key: requestKey,
+            message: requestError instanceof Error ? requestError.message : 'Recorded curves are unavailable.',
+          });
         }
       });
     return () => { active = false; };
-  }, [selectedGeneration, agentId, selectedIsEvaluated]);
+  }, [requestKey, selectedGeneration, agentId, selectedIsEvaluated]);
 
   if (loading) return <section><h2>Backtest</h2><p>Loading recorded curves...</p></section>;
   if (!state) return <section><h2>Backtest</h2><p className="error-state">Interactive simulation is unavailable.</p></section>;
 
-  const currentBacktest = selectedIsEvaluated && backtest?.generation === selectedGeneration ? backtest : null;
+  const currentBacktest = selectedIsEvaluated && backtest?.key === requestKey ? backtest.value : null;
+  const currentError = error?.key === requestKey ? error.message : null;
+  const loadingBacktest = selectedIsEvaluated && currentBacktest === null && currentError === null;
   const curves: Array<{ key: CurveKey; name: string; tone: ResearchChartSeries['tone']; values: number[] }> = [
     { key: 'selected', name: 'Selected organism', tone: 'selected', values: currentBacktest?.selected_agent?.equity_curve ?? [] },
     { key: 'lineage', name: 'Best lineage', tone: 'best', values: currentBacktest?.best_lineage?.equity_curve ?? [] },
@@ -79,7 +85,7 @@ export function BacktestPage() {
   return (
     <>
       <section className="backtest-controls">
-        {selectedIsEvaluated && error && <p className="error-state" role="status">{error}</p>}
+        {selectedIsEvaluated && currentError && <p className="error-state" role="status">{currentError}</p>}
         <div className="section-heading-row">
           <div><p className="section-kicker">Recorded results · evolution-development</p><h2>Strategy behavior</h2></div>
           <div className="field-row backtest-selectors">
@@ -87,7 +93,7 @@ export function BacktestPage() {
               {evaluated.map((generation) => <option key={generation.generation} value={generation.generation}>Generation {generation.generation}</option>)}
               {evaluated.length === 0 && <option value={selectedGeneration}>No evaluated generation</option>}
             </select></div>
-            <div><label htmlFor="backtest-agent">Selected organism</label><select id="backtest-agent" value={agentId || backtest?.selected_agent?.agent_id || ''} onChange={(event) => setAgentId(event.target.value)} disabled={!selectedGenerationRecord || selectedGenerationRecord.status !== 'EVALUATED'}>
+            <div><label htmlFor="backtest-agent">Selected organism</label><select id="backtest-agent" value={agentId || currentBacktest?.selected_agent?.agent_id || ''} onChange={(event) => setAgentId(event.target.value)} disabled={!selectedGenerationRecord || selectedGenerationRecord.status !== 'EVALUATED'}>
               {(selectedGenerationRecord?.agents ?? []).map((agent) => <option key={agent.agent_id} value={agent.agent_id}>{agent.agent_id}</option>)}
             </select></div>
           </div>
@@ -99,7 +105,7 @@ export function BacktestPage() {
 
       <section className="backtest-chart-section">
         <div className="section-heading-row"><div><p className="section-kicker">Portfolio value · INR</p><h2>Equity curve</h2></div><span className="count-label">{maxPoints ? `${maxPoints - 1} trading days` : 'No observations'}</span></div>
-        {currentBacktest ? <ResearchChart ariaLabel="Saved development equity curves for selected organism, best lineage, manual baseline and buy-and-hold" xLabels={xLabels} formatValue={(value) => formatCurrency(value)} series={selectedCurves} /> : <div className="empty-state">{selectedIsEvaluated ? 'Recorded curves are unavailable for this generation.' : 'This generation has not been evaluated; no equity curve is available.'}</div>}
+        {currentBacktest ? <ResearchChart ariaLabel="Saved development equity curves for selected organism, best lineage, manual baseline and buy-and-hold" xLabels={xLabels} formatValue={(value) => formatCurrency(value)} series={selectedCurves} /> : <div className="empty-state">{loadingBacktest ? 'Loading recorded curves…' : selectedIsEvaluated ? 'Recorded curves are unavailable for this generation.' : 'This generation has not been evaluated; no equity curve is available.'}</div>}
       </section>
 
       <section className="backtest-drawdown-section">

@@ -74,6 +74,15 @@ const readyState = {
   lineage: [],
   strategy_curves: { manual_baseline: [], buy_and_hold: [] },
   remaining_development_days: 100,
+  population_config: {
+    population_size: 1,
+    starting_capital: 100000,
+    survival_threshold: 0.9,
+    mutation_rate: 0.05,
+    mutation_sigma: 0.1,
+    immigrant_fraction: 0.05,
+    seed: 42,
+  },
 };
 
 const controls = {
@@ -115,6 +124,67 @@ describe('interactive research views', () => {
     expect(screen.getByRole('option', { name: 'Generation 0 — EVALUATED' })).toBeTruthy();
     expect(screen.getByRole('option', { name: 'Generation 1 — READY' })).toBeTruthy();
     expect(screen.getByText('0 / 10')).toBeTruthy();
+  });
+
+  it('shows completed-generation deaths and actual next-generation mutation metrics', () => {
+    const deadAgent = {
+      ...readyAgent,
+      generation: 0,
+      status: 'DEAD',
+      ending_capital: 90000,
+      capital: 90000,
+      dead_reason: 'no_profit',
+      mutation_applied: false,
+    };
+    const evaluatedGeneration = {
+      ...readyState.generations[0],
+      metrics: {
+        alive_count: 0,
+        dead_count: 1,
+        profit_making_parent_count: 0,
+        offspring_count: 1,
+        immigrant_count: 1,
+        mutation_count: 0,
+        best_ending_capital: 90000,
+        mean_ending_capital: 90000,
+        worst_ending_capital: 90000,
+      },
+      agents: [deadAgent],
+    };
+    vi.mocked(useSimulation).mockReturnValue({
+      ...controls,
+      selectedGeneration: 0,
+      state: { ...readyState, generations: [evaluatedGeneration, readyState.generations[1]] },
+    });
+
+    render(<PopulationPage />);
+
+    expect(screen.getByText('No profit by generation end')).toBeTruthy();
+    expect(screen.getByText(/0 profit-making parents.*1 replacements.*1 immigrants/)).toBeTruthy();
+    const mutationMetric = screen.getByText('Mutated next-gen agents').parentElement;
+    expect(mutationMetric?.textContent).toBe('Mutated next-gen agents0');
+  });
+
+  it('labels legacy mutation records as unknown instead of claiming a false count', () => {
+    const legacyAgent = { ...readyAgent, mutation_applied: null };
+    vi.mocked(useSimulation).mockReturnValue({
+      ...controls,
+      state: {
+        ...readyState,
+        agents: [legacyAgent],
+        generations: [
+          { ...readyState.generations[0], metrics: { ...readyState.generations[0].metrics, mutation_count: null } },
+          { ...readyState.generations[1], agents: [legacyAgent] },
+        ],
+      },
+    });
+
+    render(<PopulationPage />);
+
+    expect(screen.getByText('Unknown (legacy)')).toBeTruthy();
+    expect(screen.getByText('Mutation details for this generation were not recorded accurately by the previous tracking version.')).toBeTruthy();
+    const mutationMetric = screen.getByText('Mutated agents this generation').parentElement;
+    expect(mutationMetric?.textContent).toBe('Mutated agents this generationUnknown');
   });
 
   it('dispatches next-day, generation, N-generation, and reset controls', () => {
@@ -180,6 +250,45 @@ describe('interactive research views', () => {
     expect(screen.getByText('Final held-out test')).toBeTruthy();
   });
 
+  it('plots evaluated equity curves and lets users hide a strategy series', async () => {
+    const evaluatedAgent = {
+      ...readyAgent,
+      generation: 0,
+      status: 'ALIVE',
+      alive: true,
+      ending_capital: 101000,
+      capital: 101000,
+      equity_curve: [100000, 101000],
+    };
+    const completedGeneration = {
+      ...readyState.generations[0],
+      agents: [evaluatedAgent],
+      daily_events: [{ generation: 0, day: 1, date: '2024-01-08', counts: { BUY: 1, HOLD: 0, SELL: 0 }, trade_count: 2, best_capital: 101000, mean_capital: 101000, worst_capital: 101000, agents: [emptyDecision] }],
+    };
+    vi.mocked(useSimulation).mockReturnValue({
+      ...controls,
+      state: { ...readyState, generations: [completedGeneration, readyState.generations[1]] },
+    });
+    vi.mocked(loadBacktest).mockResolvedValue({
+      generation: 0,
+      data_split: 'evolution-development',
+      selected_agent: evaluatedAgent,
+      best_lineage: evaluatedAgent,
+      manual_baseline: [100000, 100500],
+      buy_and_hold: [100000, 100800],
+      final_test_enabled: false,
+    });
+
+    const { container } = render(<BacktestPage />);
+    await waitFor(() => expect(container.querySelectorAll('.backtest-chart-section svg')).toHaveLength(1));
+    const equityChart = container.querySelector('.backtest-chart-section svg');
+    expect(equityChart?.querySelectorAll('polyline')).toHaveLength(4);
+
+    const selectedSeries = container.querySelector('.chart-toggles input') as HTMLInputElement;
+    fireEvent.click(selectedSeries);
+    expect(equityChart?.querySelectorAll('polyline')).toHaveLength(3);
+  });
+
   it('keeps fractional chart ranges proportional instead of implying a 100 percent swing', () => {
     render(<ResearchChart
       ariaLabel="Recorded drawdown"
@@ -190,5 +299,16 @@ describe('interactive research views', () => {
     expect(screen.queryByText('100.00%')).toBeNull();
     expect(screen.queryByText('-100.00%')).toBeNull();
     expect(screen.getByText('-0.20%')).toBeTruthy();
+  });
+
+  it('renders finite chart points without emitting invalid SVG coordinates for missing values', () => {
+    const { container } = render(<ResearchChart
+      ariaLabel="Capital with a missing observation"
+      series={[{ name: 'Capital', values: [100000, Number.NaN, 99000], tone: 'best' }]}
+    />);
+
+    expect(screen.getByRole('img', { name: 'Capital with a missing observation' })).toBeTruthy();
+    expect(container.querySelectorAll('circle')).toHaveLength(2);
+    expect(container.querySelector('svg')?.innerHTML).not.toContain('NaN');
   });
 });

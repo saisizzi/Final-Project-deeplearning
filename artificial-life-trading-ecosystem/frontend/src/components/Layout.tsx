@@ -16,7 +16,7 @@ const navigation = [
 
 export function AppLayout() {
   const experiment = useExperiment();
-  const { state } = useSimulation();
+  const { state, error } = useSimulation();
 
   return (
     <div className="app-shell">
@@ -64,6 +64,7 @@ export function AppLayout() {
         </header>
 
         <main className="page-shell">
+          {error && <p className="error-state" role="alert">{error}</p>}
           <Outlet />
         </main>
       </div>

@@ -19,7 +19,7 @@ const height = 252;
 const inset = { top: 14, right: 22, bottom: 34, left: 92 };
 
 export function ResearchChart({ series, xLabels = [], formatValue = (value) => value.toFixed(0), ariaLabel, children }: ResearchChartProps) {
-  const available = series.filter((item) => item.values.length > 0);
+  const available = series.filter((item) => item.values.some(Number.isFinite));
   const allValues = available.flatMap((item) => item.values).filter(Number.isFinite);
   if (!allValues.length) {
     return <div className="empty-state">No recorded observations are available for this chart.</div>;
@@ -57,11 +57,19 @@ export function ResearchChart({ series, xLabels = [], formatValue = (value) => v
           })}
           <line className="chart-grid chart-axis" x1={inset.left} x2={inset.left} y1={inset.top} y2={height - inset.bottom} />
           {available.map((item) => {
-            const points = item.values.map((value, index) => `${x(index)},${y(value)}`).join(' ');
+            const segments: string[][] = [];
+            item.values.forEach((value, index) => {
+              if (!Number.isFinite(value)) {
+                if (segments.at(-1)?.length) segments.push([]);
+                return;
+              }
+              if (!segments.length) segments.push([]);
+              segments.at(-1)?.push(`${x(index)},${y(value)}`);
+            });
             return (
               <g key={item.name}>
-                {item.values.length > 1 && <polyline className={`chart-line chart-line-${item.tone}`} points={points} />}
-                {item.values.map((value, index) => (
+                {segments.filter((segment) => segment.length > 1).map((segment, index) => <polyline key={`${item.name}-segment-${index}`} className={`chart-line chart-line-${item.tone}`} points={segment.join(' ')} />)}
+                {item.values.map((value, index) => Number.isFinite(value) && (
                   <circle
                     key={`${item.name}-${index}`}
                     className={`chart-point chart-point-${item.tone}`}

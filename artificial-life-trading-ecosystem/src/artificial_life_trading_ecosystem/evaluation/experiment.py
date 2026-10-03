@@ -79,7 +79,7 @@ class ExperimentConfig:
     generations: int = 1
     mutation_rate: float = 0.05
     mutation_sigma: float = 0.10
-    survival_threshold: float = 0.90
+    survival_threshold: float = 1.0
     immigrant_fraction: float = 0.05
     transaction_cost: float = 0.001
     starting_capital: float = 100000.0

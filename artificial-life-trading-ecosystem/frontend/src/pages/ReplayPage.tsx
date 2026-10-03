@@ -18,12 +18,17 @@ export function ReplayPage() {
   const [error, setError] = useState<string | null>(null);
   const [generationOverride, setGenerationOverride] = useState<number | null>(null);
   const [loadedGeneration, setLoadedGeneration] = useState<number | null>(null);
+  const [loadedExperimentId, setLoadedExperimentId] = useState<string | null>(null);
   const replayable = state?.generations.filter((generation) => generation.daily_events.length > 0) ?? [];
   const latestReplayable = replayable.at(-1)?.generation;
   const replayGeneration = generationOverride !== null && replayable.some((generation) => generation.generation === generationOverride)
     ? generationOverride
     : latestReplayable ?? state?.generation ?? 0;
-  const playbackEvents = loadedGeneration === replayGeneration ? events : [];
+  const playbackEvents = replayable.length > 0
+    && loadedGeneration === replayGeneration
+    && loadedExperimentId === state?.experiment_id
+    ? events
+    : [];
 
   useEffect(() => {
     if (!replayable.length) return undefined;
@@ -33,6 +38,7 @@ export function ReplayPage() {
         if (active) {
           setEvents(result.events);
           setLoadedGeneration(replayGeneration);
+          setLoadedExperimentId(state?.experiment_id ?? null);
           setEventIndex(0);
           setPlaying(false);
           setAgentId(result.events[0]?.agents[0]?.agent_id ?? '');
@@ -43,7 +49,7 @@ export function ReplayPage() {
         if (active) setError(requestError instanceof Error ? requestError.message : 'Recorded replay could not be loaded.');
       });
     return () => { active = false; };
-  }, [replayGeneration, replayable.length]);
+  }, [replayGeneration, replayable.length, state?.experiment_id]);
 
   useEffect(() => {
     if (!playing || playbackEvents.length < 2) return undefined;

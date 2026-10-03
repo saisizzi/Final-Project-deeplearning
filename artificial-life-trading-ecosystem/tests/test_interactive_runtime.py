@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -82,6 +84,132 @@ def test_next_day_uses_prior_data_and_records_real_decisions(tmp_path) -> None:
     assert all(agent["trade_count"] == 2 for agent in state["agents"])
 
 
+def test_unprofitable_agents_die_at_generation_end_and_are_replaced(tmp_path) -> None:
+    simulation = make_simulation(tmp_path)
+    market = market_frame(30)
+    market.loc[0, ["Open", "High", "Low", "Close"]] = [100.0, 101.0, 79.0, 80.0]
+    market.loc[1:9, ["Open", "High", "Low", "Close"]] = 80.0
+    simulation.development_market = market
+    for agent in simulation.population.agents:
+        agent.genome.position_size = 1.0
+        agent.genome.stop_loss = 0.5
+        agent.genome.trading_params["position_size"] = 1.0
+        agent.genome.trading_params["stop_loss"] = 0.5
+
+    first_day = simulation.next_day()
+    assert all(agent["status"] == "RUNNING" for agent in first_day["agents"])
+    assert all(agent["capital"] < agent["starting_capital"] * 0.9 for agent in first_day["agents"])
+    trade_counts = {agent["agent_id"]: agent["trade_count"] for agent in first_day["agents"]}
+
+    second_day = simulation.next_day()
+    assert len(second_day["daily_events"][-1]["agents"]) == 4
+    assert all(agent["status"] == "RUNNING" for agent in second_day["agents"])
+    assert all(agent["trade_count"] > trade_counts[agent["agent_id"]] for agent in second_day["agents"])
+
+    for _ in range(8):
+        completed = simulation.next_day()
+    generation_zero = next(item for item in completed["generations"] if item["generation"] == 0)
+    assert generation_zero["metrics"]["alive_count"] == 0
+    assert generation_zero["metrics"]["dead_count"] == 4
+    assert all(agent["status"] == "DEAD" for agent in generation_zero["agents"])
+    assert all(agent["immigrant"] for agent in completed["agents"])
+    assert all(agent["dead_reason"] == "no_profit" for agent in generation_zero["agents"])
+
+
+def test_reload_keeps_unprofitable_agents_active_until_generation_evaluation(tmp_path) -> None:
+    simulation = make_simulation(tmp_path)
+    simulation.development_cursor = 1
+    simulation.population.generation_status = GenerationStatus.RUNNING
+    agent = simulation.population.agents[0]
+    agent.cash = 80000.0
+    agent.current_capital = 80000.0
+    agent.status = "RUNNING"
+    agent.alive = True
+    simulation._persist()
+
+    restored = InteractiveSimulation(
+        development_market=simulation.development_market,
+        history_prefix=simulation.history_prefix,
+        forecaster=SyntheticForecaster(),
+        state_path=simulation.state_path,
+        population_size=4,
+        seed=19,
+    )
+    assert restored.get_state()["agents"][0]["status"] == "RUNNING"
+
+    next_day = restored.next_day()
+    assert "A001" in {decision["agent_id"] for decision in next_day["daily_events"][-1]["agents"]}
+    assert next_day["agents"][0]["status"] == "RUNNING"
+    assert next_day["agents"][0]["trade_count"] > 0
+
+
+def test_profit_makers_parent_replacements_and_real_mutations_are_recorded(tmp_path) -> None:
+    simulation = make_simulation(tmp_path)
+    simulation.population.mutation_rate = 1.0
+    profitable_ids = {simulation.population.agents[0].agent_id, simulation.population.agents[1].agent_id}
+    for index, agent in enumerate(simulation.population.agents):
+        ending_capital = 110000.0 - index * 5000.0
+        agent.cash = ending_capital
+        agent.current_capital = ending_capital
+        agent.statistics["ending_capital"] = ending_capital
+        agent.status = "RUNNING"
+        agent.alive = True
+
+    simulation._evaluate_and_reproduce()
+
+    generation_zero = simulation.completed_generations[0]
+    assert generation_zero["metrics"]["dead_count"] == 2
+    assert generation_zero["metrics"]["profit_making_parent_count"] == 2
+    children = simulation.population.agents
+    assert len(children) == 4
+    for child in children:
+        lineage = simulation.population.lineage[child.agent_id]
+        assert set(lineage.parent_ids).issubset(profitable_ids)
+    mutated_children = [child for child in children if simulation.population.lineage[child.agent_id].mutation_applied]
+    assert generation_zero["metrics"]["mutation_count"] == len(mutated_children)
+    assert 0 <= len(mutated_children) < 4
+    assert all(child["mutation_applied"] for child in simulation.get_state()["agents"] if child["agent_id"] in {agent.agent_id for agent in mutated_children})
+
+
+def test_legacy_mutation_records_are_not_reported_as_verified(tmp_path) -> None:
+    simulation = make_simulation(tmp_path, load_existing=False)
+    parent = simulation.population.agents[0]
+    child = simulation.population.create_child(parent_a=parent, parent_b=None, generation=1)
+    simulation.population.lineage[child.agent_id].mutation_applied = True
+    simulation.population.agents = [child]
+    simulation.population.generation = 1
+    simulation.completed_generations = [{
+        "generation": 0,
+        "status": "EVALUATED",
+        "day": 10,
+        "metrics": {"mutation_count": 0},
+        "agents": [{"agent_id": child.agent_id, "mutation_applied": True}],
+        "daily_events": [],
+    }]
+    simulation._persist()
+
+    payload = json.loads(simulation.state_path.read_text(encoding="utf-8"))
+    payload.pop("legacy_mutations_through_generation")
+    simulation.state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    restored = InteractiveSimulation(
+        development_market=simulation.development_market,
+        history_prefix=simulation.history_prefix,
+        forecaster=SyntheticForecaster(),
+        state_path=simulation.state_path,
+        population_size=4,
+        seed=19,
+    )
+    state = restored.get_state()
+
+    assert state["agents"][0]["mutation_applied"] is None
+    assert next(item for item in state["lineage"] if item["agent_id"] == child.agent_id)["mutation_applied"] is None
+    assert state["generations"][0]["metrics"]["mutation_count"] is None
+    restored._persist()
+    persisted_lineage = json.loads(simulation.state_path.read_text(encoding="utf-8"))["lineage"]
+    assert next(item for item in persisted_lineage if item["agent_id"] == child.agent_id)["mutation_applied"] is True
+
+
 def test_generation_evaluates_then_reproduces_ready_children(tmp_path) -> None:
     simulation = make_simulation(tmp_path)
     state = simulation.run_current_generation()
@@ -92,14 +220,19 @@ def test_generation_evaluates_then_reproduces_ready_children(tmp_path) -> None:
     previous = state["generations"][0]
     assert previous["status"] == "EVALUATED"
     assert previous["day"] == 10
-    assert previous["metrics"]["alive_count"] == 4
-    assert all(agent["status"] == "ALIVE" for agent in previous["agents"])
+    profitable = [
+        agent for agent in previous["agents"]
+        if agent["ending_capital"] > agent["starting_capital"]
+    ]
+    assert previous["metrics"]["alive_count"] == len(profitable)
+    assert previous["metrics"]["dead_count"] == len(previous["agents"]) - len(profitable)
+    assert all(agent["status"] == ("ALIVE" if agent in profitable else "DEAD") for agent in previous["agents"])
     assert all(agent["status"] == "READY" for agent in state["agents"])
     assert all(agent["ending_capital"] is None for agent in state["agents"])
     assert all(agent["trade_count"] == 0 for agent in state["agents"])
     assert len({agent["agent_id"] for agent in state["agents"]}) == 4
     lineage = {record["agent_id"]: record for record in state["lineage"]}
-    assert all(lineage[agent["agent_id"]]["status"] == "ALIVE" for agent in previous["agents"])
+    assert all(lineage[agent["agent_id"]]["status"] == agent["status"] for agent in previous["agents"])
     assert all(lineage[agent["agent_id"]]["status"] == "READY" for agent in state["agents"])
     assert all(lineage[parent]["offspring_ids"] for parent in (agent["parent_a"] for agent in state["agents"] if agent["parent_a"]))
 

@@ -29,7 +29,7 @@ class Settings:
     mutation_rate: float = field(default_factory=lambda: float(os.getenv("MUTATION_RATE", "0.05")))
     mutation_sigma: float = field(default_factory=lambda: float(os.getenv("MUTATION_SIGMA", "0.10")))
     starting_capital: float = field(default_factory=lambda: float(os.getenv("STARTING_CAPITAL", "100000.0")))
-    survival_threshold: float = field(default_factory=lambda: float(os.getenv("SURVIVAL_THRESHOLD", "0.90")))
+    survival_threshold: float = field(default_factory=lambda: float(os.getenv("SURVIVAL_THRESHOLD", "1.0")))
     immigrant_fraction: float = field(default_factory=lambda: float(os.getenv("IMMIGRANT_FRACTION", "0.05")))
     elite_count: int = field(default_factory=lambda: int(os.getenv("ELITE_COUNT", "1")))
     transaction_cost: float = field(default_factory=lambda: float(os.getenv("TRANSACTION_COST", "0.001")))
